@@ -7,10 +7,10 @@ import java.security.ProtectionDomain;
 import java.util.HashSet;
 import java.util.Set;
 
-import com.runtimeverification.rvpredict.instrumentation.InstrumentUtils;
-import com.runtimeverification.rvpredict.instrumentation.transformer.ClassWriter;
-import com.runtimeverification.rvpredict.instrumentation.transformer.ExceptionHandlerSorter;
-import com.runtimeverification.rvpredict.instrumentation.transformer.MethodTransformer;
+import com.runtimeverification.rvpredict.instrument.InstrumentUtils;
+import com.runtimeverification.rvpredict.instrument.transformer.ClassWriter;
+import com.runtimeverification.rvpredict.instrument.transformer.ExceptionHandlerSorter;
+import com.runtimeverification.rvpredict.instrument.transformer.MethodTransformer;
 import com.runtimeverification.rvpredict.internal.org.objectweb.asm.ClassReader;
 import com.runtimeverification.rvpredict.internal.org.objectweb.asm.ClassVisitor;
 import com.runtimeverification.rvpredict.internal.org.objectweb.asm.MethodVisitor;
@@ -19,6 +19,7 @@ import com.runtimeverification.rvpredict.internal.org.objectweb.asm.Type;
 import com.runtimeverification.rvpredict.internal.org.objectweb.asm.commons.GeneratorAdapter;
 import com.runtimeverification.rvpredict.internal.org.objectweb.asm.commons.Method;
 import com.runtimeverification.rvpredict.metadata.ClassFile;
+import com.runtimeverification.rvpredict.util.Logger;
 
 public class ArrayElementAccessLogger implements ClassFileTransformer {
 
@@ -65,8 +66,9 @@ public class ArrayElementAccessLogger implements ClassFileTransformer {
 			if (Agent.debug)
 				System.out.println("Allowed " + className);
 
+			Logger logger = new Logger();
 			ClassReader reader = new ClassReader(classfileBuffer);
-			ClassWriter writer = new ClassWriter(reader, loader);
+			ClassWriter writer = new ClassWriter(reader, loader, className, logger);
 
 			ClassVisitor transformer = new MyClassVisitor(Opcodes.ASM5, writer);
 

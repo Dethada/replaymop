@@ -1,12 +1,12 @@
 package replaymop.parser;
 
+import java.io.EOFException;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -16,13 +16,10 @@ import com.beust.jcommander.JCommander;
 import com.beust.jcommander.Parameter;
 import com.beust.jcommander.ParameterException;
 import com.runtimeverification.rvpredict.config.Configuration;
-import com.runtimeverification.rvpredict.log.EventItem;
-import com.runtimeverification.rvpredict.log.OfflineLoggingFactory;
-import com.runtimeverification.rvpredict.trace.Event;
-import com.runtimeverification.rvpredict.trace.EventType;
-import com.runtimeverification.rvpredict.trace.EventUtils;
-import com.runtimeverification.rvpredict.trace.MemoryAccessEvent;
-import com.runtimeverification.rvpredict.trace.TraceCache;
+import com.runtimeverification.rvpredict.metadata.Metadata;
+import com.runtimeverification.rvpredict.log.EventType;
+import com.runtimeverification.rvpredict.log.ReadonlyEventInterface;
+import com.runtimeverification.rvpredict.trace.OrderedLoggedTraceReader;
 
 import replaymop.Main;
 import replaymop.Parameters;
@@ -36,8 +33,8 @@ public class RVPredictLogParser extends Parser {
 													// new thread
 	public static final String MOCK_STATE_FIELD = "$state";
 
-	OfflineLoggingFactory metaData;
-	TraceCache trace;
+	Metadata metaData;
+	OrderedLoggedTraceReader traceReader;
 
 	Map<Integer, Set<Long>> locIdThreadAccessSet = new HashMap<Integer, Set<Long>>();
 	// distinguish array and and non array
@@ -45,18 +42,21 @@ public class RVPredictLogParser extends Parser {
 	Set<Long> threads = new TreeSet<Long>();
 
 	public RVPredictLogParser(File logFolder) {
-		Configuration config = new Configuration();
-		config.outdir = logFolder.toString();
-		metaData = new OfflineLoggingFactory(config);
-		trace = new TraceCache(metaData);
+		// TODO: pass valid configuration
+		String[] args = new String[2];
+		args[0] = "--predict";
+		args[1] = logFolder.toString();
+		Configuration config = Configuration.instance(args);
+		metaData = Metadata.readFrom(config.getMetadataPath());
+		traceReader = new OrderedLoggedTraceReader(config);
 		this.spec = new ReplaySpecification();
 		spec.fileName = logFolder.getName().toUpperCase();
 		initSpec();
 
 		if (Main.parameters.debug) {
-			for (int i = 1; metaData.getVarSig(i) != null; i++)
+			for (int i = 1; metaData.getVariableSig(i) != null; i++)
 				System.out.println(String.format("%d: %s", i,
-						metaData.getVarSig(i)));
+						metaData.getVariableSig(i)));
 			System.out.println("--");
 		}
 	}
@@ -79,12 +79,11 @@ public class RVPredictLogParser extends Parser {
 		case WRITE_UNLOCK:
 		case READ_LOCK:
 		case READ_UNLOCK:
-		case WAIT_REL:
+		case WAIT_RELEASE:
 			// case WAIT_ACQ:
 			// case START:
 			// case PRE_JOIN:
-		case JOIN:
-		case JOIN_MAYBE_FAILED:
+		case JOIN_THREAD:
 			// case CLINIT_ENTER:
 			// case CLINIT_EXIT:
 			// case BRANCH:
@@ -106,28 +105,30 @@ public class RVPredictLogParser extends Parser {
 	@Override
 	protected void startParsing() throws ReplayMOPException {
 		try {
-			EventItem eventItem;
-			for (int index = 1; ((eventItem = trace.getNextEvent()) != null); index++) {
-				Event event = EventUtils.of(eventItem);
+			long index = 0;
+			while (true) {
+				ReadonlyEventInterface event = traceReader.readEvent();
 				EventType eventType = event.getType();
-
-				threads.add(event.getTID());
+				long full_addr = event.unsafeGetDataInternalIdentifier();
+				int addr_L = (int) ((full_addr >> 32) & 0xFFFFFFFFL);
+				int addr_R = (int) (full_addr & 0xFFFFFFFFL);
+				threads.add(event.getOriginalThreadId());
 
 				if (Main.parameters.debug)
 					System.out.println("--" + index + event + " "
-							+ metaData.getStmtSig(event.getLocId()) + "\t"
-							+ eventItem.ADDRL + " " + eventItem.ADDRR);
+							+ metaData.getLocationSig(event.getLocationId()) + "\t"
+							+ addr_L + " " + addr_R);
 
 				if (!important(eventType))
 					continue;
 
-				addEventToSchedule(event.getTID());
+				addEventToSchedule(event.getOriginalThreadId());
 
-				int loc = -eventItem.ADDRR;
-				if (event instanceof MemoryAccessEvent && loc > 0 /* TODO:tem */) {
+				int loc = -addr_R;
+				if (event.isReadOrWrite() && loc > 0 /* TODO:tem */) {
 					if (!locIdThreadAccessSet.keySet().contains(loc))
 						locIdThreadAccessSet.put(loc, new HashSet<Long>());
-					locIdThreadAccessSet.get(loc).add(event.getTID());
+					locIdThreadAccessSet.get(loc).add(event.getOriginalThreadId());
 					if (locIdinSchedUnit.get(loc) == null)
 						locIdinSchedUnit
 								.put(loc, new ArrayList<ScheduleUnit>());
@@ -140,17 +141,20 @@ public class RVPredictLogParser extends Parser {
 									+ ": "
 									+ event
 									+ " "
-									+ metaData.getStmtSig(event.getLocId())
+									+ metaData.getLocationSig(event.getLocationId())
 									+ "\t"
-									+ eventItem.ADDRL + " " + eventItem.ADDRR);
+									+ addr_L + " " + addr_R);
+				index++;
 				// TODO: schedule, thread creation order
 			}
+		} catch (EOFException e) {
+			// readEvent throws EOFException when it reaches the end of the trace
 		} catch (Exception e) {
 			e.printStackTrace();
 			throw new ReplayMOPException("error in parsing log file");
 		}
 		generateSpec();
-		
+
 		if (Main.parameters.debug){
 			System.out.println("---");
 			System.out.println(spec);
@@ -193,14 +197,14 @@ public class RVPredictLogParser extends Parser {
 		// spec.shared.add(new Variable("*", varSig.replace("/", ".")
 		// .replace("$", "")));
 
-		String varSig = metaData.getVarSig(loc);
-		
+		String varSig = metaData.getVariableSig(loc);
+
 		if (((Set) locIdThreadAccessSet.get(loc)).size() <= 1)
 			return null;
-		
+
 		if (Main.parameters.debug)
 			System.out.println(varSig);
-		
+
 		Variable var = new Variable();
 		int dotIndex = varSig.lastIndexOf('.');
 		if (dotIndex == -1)
@@ -222,9 +226,9 @@ public class RVPredictLogParser extends Parser {
 			var.type = "*";
 			var.name = varSig;
 		}
-		
+
 		return var;
-	
+
 
 	}
 

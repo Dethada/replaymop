@@ -1,74 +1,61 @@
 package replaymop.utils;
 
 import java.io.File;
-import java.io.FileOutputStream;
-import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintStream;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.TreeSet;
 
 import com.beust.jcommander.JCommander;
 import com.beust.jcommander.Parameter;
 import com.beust.jcommander.ParameterException;
 import com.runtimeverification.rvpredict.config.Configuration;
-import com.runtimeverification.rvpredict.log.EventItem;
-import com.runtimeverification.rvpredict.log.OfflineLoggingFactory;
-import com.runtimeverification.rvpredict.trace.Event;
-import com.runtimeverification.rvpredict.trace.EventType;
-import com.runtimeverification.rvpredict.trace.EventUtils;
-import com.runtimeverification.rvpredict.trace.MemoryAccessEvent;
-import com.runtimeverification.rvpredict.trace.TraceCache;
-
-import replaymop.Main;
-import replaymop.Parameters;
-import replaymop.ReplayMOPException;
-import replaymop.replayspecification.ReplaySpecification;
-import replaymop.replayspecification.ScheduleUnit;
-import replaymop.replayspecification.Variable;
+import com.runtimeverification.rvpredict.metadata.Metadata;
+import com.runtimeverification.rvpredict.log.EventType;
+import com.runtimeverification.rvpredict.log.ReadonlyEventInterface;
+import com.runtimeverification.rvpredict.trace.OrderedLoggedTraceReader;
 
 public class DumpRVLog {
 
-	OfflineLoggingFactory metaData;
-	TraceCache trace;
+	Metadata metaData;
+	OrderedLoggedTraceReader traceReader;
 
 	boolean importantOnly = false;
-	
+
 	public DumpRVLog(File logFolder, boolean importantOnly) {
-		Configuration config = new Configuration();
-		config.outdir = logFolder.toString();
-		metaData = new OfflineLoggingFactory(config);
-		trace = new TraceCache(metaData);
+		// --predict $HOME/traces/account
+		String[] args = new String[2];
+		args[0] = "--predict";
+		args[1] = logFolder.toString();
+		Configuration config = Configuration.instance(args);
+		metaData = Metadata.readFrom(config.getMetadataPath());
+		traceReader = new OrderedLoggedTraceReader(config);
 		this.importantOnly = importantOnly;
 	}
 
 	@Override
 	public String toString() {
 		String ret = "";
-		for (int i = 1; metaData.getVarSig(i) != null; i++){
-			ret += (String.format("%d: %s", i, metaData.getVarSig(i)));
+		for (int i = 1; metaData.getVariableSig(i) != null; i++){
+			ret += (String.format("%d: %s", i, metaData.getVariableSig(i)));
 			ret += "\n";
 		}
 		ret += ("--");
 		ret += "\n";
 
 		try {
-			EventItem eventItem;
-			for (int index = 1; ((eventItem = trace.getNextEvent()) != null); index++) {
-				Event event = EventUtils.of(eventItem);
+			long index = 0;
+			while (true) {
+				ReadonlyEventInterface event = traceReader.readEvent();
 				EventType eventType = event.getType();
+				long full_addr = event.unsafeGetDataInternalIdentifier();
+				int addr_L = (int) ((full_addr >> 32) & 0xFFFFFFFFL);
+				int addr_R = (int) (full_addr & 0xFFFFFFFFL);
 
 				if (!important(eventType) && importantOnly)
 					continue;
 
-				ret += index + "\t" + event + " " + metaData.getStmtSig(event.getLocId())
-						+ "\t" + eventItem.ADDRL + " " + eventItem.ADDRR;
+				ret += index + "\t" + event + " " + metaData.getLocationSig(event.getLocationId())
+						+ "\t" + addr_L + " " + addr_R;
 				ret += "\n";
 				// TODO: schedule, thread creation order
 			}
@@ -86,12 +73,11 @@ public class DumpRVLog {
 		case WRITE_UNLOCK:
 		case READ_LOCK:
 		case READ_UNLOCK:
-		case WAIT_REL:
+		case WAIT_RELEASE:
 			// case WAIT_ACQ:
 			// case START:
 			// case PRE_JOIN:
-		case JOIN:
-		case JOIN_MAYBE_FAILED:
+		case JOIN_THREAD:
 			// case CLINIT_ENTER:
 			// case CLINIT_EXIT:
 			// case BRANCH:
@@ -101,7 +87,7 @@ public class DumpRVLog {
 		}
 	}
 
-	
+
 
 	static class Parameters {
 		@Parameter(description = "Trace folder")
@@ -109,7 +95,7 @@ public class DumpRVLog {
 
 		@Parameter(names = "-output", description = "Output file (standard output if not specified)")
 		public String outputFile;
-		
+
 		@Parameter(names = "-important-only", description = "Dump important events only")
 		public boolean importantOnly = false;
 	}
@@ -137,7 +123,7 @@ public class DumpRVLog {
 		File inputFolder = new File(parameters.inputFolder.get(0));
 
 		DumpRVLog dump = new DumpRVLog(inputFolder, parameters.importantOnly);
-		
+
 		out.println(dump);
 
 	}
