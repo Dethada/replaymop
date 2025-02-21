@@ -7,8 +7,11 @@ import org.apache.commons.io.FileUtils;
 
 public class AJAgentGenerator {
 	private static final String tempDirName = "tempXf12";
-
-
+	private static final String manifest = "Manifest-Version: 1.0\n" +
+				"Premain-Class: org.aspectj.weaver.loadtime.Agent\n" +
+				"Can-Redefine-Classes: true\n" +
+				"Can-Retransform-Classes: true\n" +
+				"Created-By: AspectJ Compiler\n\n";
 
 	public static void main(String args[]) throws Exception {
 		if (args.length != 1) {
@@ -31,6 +34,7 @@ public class AJAgentGenerator {
 		File root = ajFile.getParentFile();
 		File tempDir = new File(root, tempDirName);
 		File tempJar = new File(root, "temp.jar");
+		File tempManifest = new File(root, "MANIFEST.MF");
 		File xmlFile = new File(tempDir, "META-INF" + File.separator + "aop-ajc.xml");
 		String[] ajcArgs = new String[] { "-outjar", tempJar.getAbsolutePath(),
 				"-outxml", "-Xjoinpoints:synchronization",
@@ -44,10 +48,12 @@ public class AJAgentGenerator {
 		String xmlFileContent = FileUtils.readFileToString(xmlFile);
 		xmlFileContent = xmlFileContent.replaceFirst("</aspects>\\s+</aspectj>", "</aspects>\n<weaver options=\"-Xjoinpoints:synchronization\"/>\n</aspectj>");
 		FileUtils.writeStringToFile(xmlFile, xmlFileContent);
+		FileUtils.writeStringToFile(tempManifest, manifest);
 		
-		(new ProcessBuilder("jar", "cvf", "agent.jar", "-C", tempDirName, ".")).directory(root).start().waitFor();
+		(new ProcessBuilder("jar", "cvfm", "agent.jar", "MANIFEST.MF", "-C", tempDirName, ".")).directory(root).start().waitFor();
 		FileUtils.forceDelete(tempJar);
 		FileUtils.forceDelete(tempDir);
+		FileUtils.forceDelete(tempManifest);
 	}
 	
 }
